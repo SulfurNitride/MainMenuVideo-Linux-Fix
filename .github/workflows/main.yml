@@ -2,8 +2,10 @@ name: Main
 
 on:
   push:
+    branches: [master]
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.ref }}
@@ -18,9 +20,9 @@ jobs:
       AE_353_BRANCH: master
       AE_353_COMMON_LIB_BRANCH: dev-1.6.640
       FOMOD_INCLUDE_PDB: false
-      FOMOD_MOD_NAME: "Main Menu Video"
-      FOMOD_MOD_AUTHOR: "powerofthree"
-      FOMOD_MOD_NEXUS_ID: "160238"
+      FOMOD_MOD_NAME: "Main Menu Video - Linux Audio Fix"
+      FOMOD_MOD_AUTHOR: "SulfurNitride"
+      FOMOD_MOD_NEXUS_ID: ""
       FOMOD_AE353_PATH: 'AE640/SKSE/Plugins'
       FOMOD_AE353_NAME: 'SSE v1.6.640 ("Anniversary Edition")'
       FOMOD_AE353_DESCR: 'Select this if you are using Skyrim Anniversary Edition v1.6.640'

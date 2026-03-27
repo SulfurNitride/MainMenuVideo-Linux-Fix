@@ -18,12 +18,11 @@
 #include <wrl/client.h>
 
 #include <Mferror.h>
-#include <audioclient.h>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
-#include <mftransform.h>
 #include <propvarutil.h>
+#include <xaudio2.h>
 
 #include <ClibUtil/RNG.hpp>
 #include <ClibUtil/simpleINI.hpp>

@@ -44,76 +44,91 @@ void ImGui::Texture::Update(ID3D11DeviceContext* context, const cv::Mat& mat) co
 	}
 }
 
-// https://stackoverflow.com/a/54946067
-// convert video to use MF? later
+// XAudio2 audio output (replaces MF Audio Renderer for Wine/Proton compatibility)
+// MF Source Reader decodes audio to PCM, XAudio2 handles playback via FAudio on Linux
 bool VideoPlayer::LoadAudio(const std::string& path)
 {
 	HRESULT hr = MFCreateSourceReaderFromURL(stl::utf8_to_utf16(path)->c_str(), nullptr, &audioReader);
-	if (SUCCEEDED(hr)) {  // Select only the audio stream
-		hr = audioReader->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
-		if (SUCCEEDED(hr)) {
-			hr = audioReader->SetStreamSelection((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
-			if (SUCCEEDED(hr)) {
-				hr = MFCreateAudioRenderer(nullptr, &mediaSink);
-				if (SUCCEEDED(hr)) {
-					ComPtr<IMFStreamSink> streamSink;
-					hr = mediaSink->GetStreamSinkByIndex(0, &streamSink);
-					if (SUCCEEDED(hr)) {
-						ComPtr<IMFMediaTypeHandler> typeHandler;
-						hr = streamSink->GetMediaTypeHandler(&typeHandler);
-						if (SUCCEEDED(hr)) {
-							DWORD                dwCount = 0;
-							ComPtr<IMFMediaType> inputType;
-							hr = typeHandler->GetMediaTypeCount(&dwCount);
-							if (SUCCEEDED(hr)) {
-								bool mediaTypeSupported = false;
-								for (DWORD i = 0; i < dwCount; i++) {
-									inputType = nullptr;
-									typeHandler->GetMediaTypeByIndex(i, &inputType);
-									if (SUCCEEDED(typeHandler->IsMediaTypeSupported(inputType.Get(), NULL))) {
-										mediaTypeSupported = true;
-										break;
-									}
-								}
-								if (mediaTypeSupported) {
-									hr = audioReader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, NULL, inputType.Get());
-									if (SUCCEEDED(hr)) {
-										hr = typeHandler->SetCurrentMediaType(inputType.Get());
-										ComPtr<IMFAttributes> sinkWriterAttributes;
-										hr = MFCreateAttributes(&sinkWriterAttributes, 1);
-										if (SUCCEEDED(hr)) {
-											hr = sinkWriterAttributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1);
-											if (SUCCEEDED(hr)) {
-												hr = MFCreateSinkWriterFromMediaSink(mediaSink.Get(), sinkWriterAttributes.Get(), &audioWriter);
-												if (SUCCEEDED(hr)) {
-													hr = audioWriter->SetInputMediaType(0, inputType.Get(), nullptr);
-													if (SUCCEEDED(hr)) {
-														ComPtr<IMFGetService> service;
-														hr = mediaSink.As(&service);
-														if (SUCCEEDED(hr)) {
-															service->GetService(MR_POLICY_VOLUME_SERVICE, IID_PPV_ARGS(&audioVolume));
-														}
-														if (audioVolume) {
-															audioVolume->SetMasterVolume(volume.load(std::memory_order_relaxed));
-														}
-														return true;
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+	if (FAILED(hr)) {
+		logger::warn("Failed to create MF source reader for audio: 0x{:X}", static_cast<std::uint32_t>(hr));
+		ResetAudio();
+		return false;
 	}
 
-	ResetAudio();
+	// Select only the audio stream
+	hr = audioReader->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
+	if (FAILED(hr)) {
+		ResetAudio();
+		return false;
+	}
+	hr = audioReader->SetStreamSelection((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
+	if (FAILED(hr)) {
+		ResetAudio();
+		return false;
+	}
 
-	return false;
+	// Request decoded PCM output from the source reader
+	ComPtr<IMFMediaType> pcmType;
+	hr = MFCreateMediaType(&pcmType);
+	if (FAILED(hr)) {
+		ResetAudio();
+		return false;
+	}
+	pcmType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+	pcmType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+	hr = audioReader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, NULL, pcmType.Get());
+	if (FAILED(hr)) {
+		logger::warn("Failed to set PCM output type on source reader: 0x{:X}", static_cast<std::uint32_t>(hr));
+		ResetAudio();
+		return false;
+	}
+
+	// Get the actual decoded output format
+	ComPtr<IMFMediaType> outputType;
+	hr = audioReader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, &outputType);
+	if (FAILED(hr)) {
+		ResetAudio();
+		return false;
+	}
+
+	UINT32         formatSize = 0;
+	WAVEFORMATEX*  pFormat = nullptr;
+	hr = MFCreateWaveFormatExFromMFMediaType(outputType.Get(), &pFormat, &formatSize);
+	if (FAILED(hr) || !pFormat) {
+		ResetAudio();
+		return false;
+	}
+	audioFormat = *pFormat;
+	CoTaskMemFree(pFormat);
+
+	// Create XAudio2 engine (uses FAudio on Proton/Wine)
+	hr = XAudio2Create(&xaudio2);
+	if (FAILED(hr)) {
+		logger::warn("Failed to create XAudio2 engine: 0x{:X}", static_cast<std::uint32_t>(hr));
+		ResetAudio();
+		return false;
+	}
+
+	hr = xaudio2->CreateMasteringVoice(&masterVoice);
+	if (FAILED(hr)) {
+		logger::warn("Failed to create XAudio2 mastering voice: 0x{:X}", static_cast<std::uint32_t>(hr));
+		ResetAudio();
+		return false;
+	}
+
+	hr = xaudio2->CreateSourceVoice(&sourceVoice, &audioFormat);
+	if (FAILED(hr)) {
+		logger::warn("Failed to create XAudio2 source voice: 0x{:X}", static_cast<std::uint32_t>(hr));
+		ResetAudio();
+		return false;
+	}
+
+	sourceVoice->SetVolume(volume.load(std::memory_order_relaxed));
+
+	logger::info("Audio loaded via XAudio2: {}ch {}Hz {}bit",
+		audioFormat.nChannels, audioFormat.nSamplesPerSec, audioFormat.wBitsPerSample);
+
+	return true;
 }
 
 void VideoPlayer::CreateVideoThread()
@@ -237,28 +252,72 @@ void VideoPlayer::CreateAudioThread()
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
 		startBarrier.arrive_and_wait();
-		audioWriter->BeginWriting();
+		sourceVoice->Start();
 
-		ComPtr<IMFSample> sample;
-		DWORD             streamFlags = 0;
-		MFTIME            timestamp = 0;
-		constexpr DWORD   audioStreamIndex = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
+		constexpr DWORD  audioStreamIndex = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
+		constexpr UINT32 MAX_QUEUED_BUFFERS = 4;
+
+		// Ring buffer pool — each slot stays alive until XAudio2 consumes it
+		std::vector<std::vector<BYTE>> bufferPool(MAX_QUEUED_BUFFERS);
+		UINT32 currentBuffer = 0;
 
 		while (!st.stop_requested()) {
-			sample.Reset();
+			// Throttle: wait if XAudio2 has enough queued data
+			XAUDIO2_VOICE_STATE voiceState;
+			sourceVoice->GetState(&voiceState);
+			if (voiceState.BuffersQueued >= MAX_QUEUED_BUFFERS) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				continue;
+			}
+
+			ComPtr<IMFSample> sample;
+			DWORD             streamFlags = 0;
+			MFTIME            timestamp = 0;
 
 			HRESULT hr = audioReader->ReadSample(audioStreamIndex, 0, nullptr, &streamFlags, &timestamp, &sample);
-			if (FAILED(hr) || streamFlags & MF_SOURCE_READERF_ENDOFSTREAM) {
+			if (FAILED(hr) || (streamFlags & MF_SOURCE_READERF_ENDOFSTREAM)) {
 				break;
 			}
 
-			if (streamFlags & MF_SOURCE_READERF_STREAMTICK) {
-				audioWriter->SendStreamTick(0, timestamp);
+			if (!sample) {
+				continue;
 			}
 
-			if (sample) {
-				audioWriter->WriteSample(0, sample.Get());
+			ComPtr<IMFMediaBuffer> mediaBuffer;
+			hr = sample->ConvertToContiguousBuffer(&mediaBuffer);
+			if (FAILED(hr)) {
+				continue;
 			}
+
+			BYTE* rawData = nullptr;
+			DWORD rawLen = 0;
+			hr = mediaBuffer->Lock(&rawData, nullptr, &rawLen);
+			if (FAILED(hr)) {
+				continue;
+			}
+
+			// Copy decoded PCM into our persistent buffer slot
+			auto& buf = bufferPool[currentBuffer % MAX_QUEUED_BUFFERS];
+			buf.assign(rawData, rawData + rawLen);
+			mediaBuffer->Unlock();
+
+			XAUDIO2_BUFFER xbuf{};
+			xbuf.AudioBytes = rawLen;
+			xbuf.pAudioData = buf.data();
+
+			sourceVoice->SubmitSourceBuffer(&xbuf);
+			currentBuffer++;
+		}
+
+		// Drain remaining buffers before exiting (unless stop requested)
+		if (!st.stop_requested()) {
+			XAUDIO2_VOICE_STATE voiceState;
+			do {
+				sourceVoice->GetState(&voiceState);
+				if (voiceState.BuffersQueued > 0) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				}
+			} while (voiceState.BuffersQueued > 0 && !st.stop_requested());
 		}
 	});
 }
@@ -323,16 +382,17 @@ bool VideoPlayer::LoadVideo(ID3D11Device* device, const std::string& path, bool 
 void VideoPlayer::ResetAudio()
 {
 	audioReader = nullptr;
-	audioVolume = nullptr;
-	if (audioWriter) {
-		audioWriter->Flush(0);
-		audioWriter->Finalize();
-		audioWriter = nullptr;
+	if (sourceVoice) {
+		sourceVoice->Stop();
+		sourceVoice->FlushSourceBuffers();
+		sourceVoice->DestroyVoice();
+		sourceVoice = nullptr;
 	}
-	if (mediaSink) {
-		mediaSink->Shutdown();
-		mediaSink = nullptr;
+	if (masterVoice) {
+		masterVoice->DestroyVoice();
+		masterVoice = nullptr;
 	}
+	xaudio2 = nullptr;
 }
 
 void VideoPlayer::ResetImpl(bool playNextVideo)
@@ -474,9 +534,9 @@ void VideoPlayer::SetPlaybackMode(PLAYBACK_MODE a_mode)
 
 void VideoPlayer::IncrementVolume(float a_delta)
 {
-	if (audioVolume) {
+	if (sourceVoice) {
 		auto tempVolume = std::clamp(volume.load(std::memory_order_relaxed) + a_delta, 0.0f, 1.0f);
-		audioVolume->SetMasterVolume(tempVolume);
+		sourceVoice->SetVolume(tempVolume);
 		volume.store(tempVolume, std::memory_order_relaxed);
 		volumeDisplayStart = std::chrono::steady_clock::now();
 	}

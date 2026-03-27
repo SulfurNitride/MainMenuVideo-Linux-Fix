@@ -199,10 +199,10 @@ target_link_libraries(
 		${CommonLibName}::${CommonLibName}
 		${OpenCV_LIBS}
 		imgui::imgui
-		mf.lib
 		mfplat.lib
 		mfreadwrite.lib
 		mfuuid.lib
+		xaudio2.lib
 )
 
 target_precompile_headers(

@@ -106,9 +106,10 @@ private:
 	cv::Mat                         videoFrame;
 	mutable Lock                    videoFrameLock;
 	ComPtr<IMFSourceReader>         audioReader{};
-	ComPtr<IMFSinkWriter>           audioWriter{};
-	ComPtr<IMFMediaSink>            mediaSink{};
-	ComPtr<IMFSimpleAudioVolume>    audioVolume{};
+	ComPtr<IXAudio2>                xaudio2{};
+	IXAudio2MasteringVoice*         masterVoice{ nullptr };
+	IXAudio2SourceVoice*            sourceVoice{ nullptr };
+	WAVEFORMATEX                    audioFormat{};
 	std::atomic<float>              volume{ 1.0f };
 	time_point                      volumeDisplayStart{};
 	std::jthread                    audioThread;
