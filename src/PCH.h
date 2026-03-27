@@ -22,7 +22,7 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <propvarutil.h>
-#include <xaudio2.h>
+#include <xaudio2redist.h>
 
 #include <ClibUtil/RNG.hpp>
 #include <ClibUtil/simpleINI.hpp>

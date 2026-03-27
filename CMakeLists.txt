@@ -136,6 +136,7 @@ endif()
 
 find_package(imgui CONFIG REQUIRED)
 find_package(OpenCV COMPONENTS core videoio REQUIRED)
+find_package(xaudio2redist CONFIG REQUIRED)
 
 find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 
@@ -202,7 +203,7 @@ target_link_libraries(
 		mfplat.lib
 		mfreadwrite.lib
 		mfuuid.lib
-		xaudio2.lib
+		Microsoft::XAudio2Redist
 )
 
 target_precompile_headers(
