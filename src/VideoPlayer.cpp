@@ -91,8 +91,8 @@ bool VideoPlayer::LoadAudio(const std::string& path)
 		return false;
 	}
 
-	UINT32         formatSize = 0;
-	WAVEFORMATEX*  pFormat = nullptr;
+	UINT32        formatSize = 0;
+	WAVEFORMATEX* pFormat = nullptr;
 	hr = MFCreateWaveFormatExFromMFMediaType(outputType.Get(), &pFormat, &formatSize);
 	if (FAILED(hr) || !pFormat) {
 		ResetAudio();
@@ -259,7 +259,7 @@ void VideoPlayer::CreateAudioThread()
 
 		// Ring buffer pool — each slot stays alive until XAudio2 consumes it
 		std::vector<std::vector<BYTE>> bufferPool(MAX_QUEUED_BUFFERS);
-		UINT32 currentBuffer = 0;
+		UINT32                         currentBuffer = 0;
 
 		while (!st.stop_requested()) {
 			// Throttle: wait if XAudio2 has enough queued data
