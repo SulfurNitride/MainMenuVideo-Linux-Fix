@@ -182,8 +182,6 @@ target_compile_definitions(
 	${PROJECT_NAME}
 	PRIVATE
 		_UNICODE
-		_WIN32_WINNT=0x0A00
-		NTDDI_VERSION=0x0A000000
 )
 
 target_include_directories(

@@ -22,7 +22,13 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <propvarutil.h>
+// Temporarily override _WIN32_WINNT for xaudio2.h (requires Win8+)
+// CommonLibSSE sets it to Win7, but XAudio2 is available on Proton via FAudio
+#pragma push_macro("_WIN32_WINNT")
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
 #include <xaudio2.h>
+#pragma pop_macro("_WIN32_WINNT")
 
 #include <ClibUtil/RNG.hpp>
 #include <ClibUtil/simpleINI.hpp>
