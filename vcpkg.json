@@ -18,7 +18,7 @@
     {
       "name": "opencv4",
       "default-features": false,
-      "features": [ "ffmpeg", "fs", "intrinsics", "thread" ]
+      "features": [ "fs", "intrinsics", "msmf", "thread" ]
     },
     "rsm-binary-io",
     "spdlog",

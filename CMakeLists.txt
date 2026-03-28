@@ -12,6 +12,8 @@ option(BUILD_SKYRIMAE "Build for Skyrim AE" OFF)
 
 # ---- Cache build vars ----
 
+set($ENV{OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS} true)
+
 macro(set_from_environment VARIABLE)
 	if (NOT DEFINED ${VARIABLE} AND DEFINED ENV{${VARIABLE}})
 		set(${VARIABLE} $ENV{${VARIABLE}})
