@@ -2,7 +2,8 @@
 
 #include "Manager.h"
 
-extern "C" {
+extern "C"
+{
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
@@ -291,7 +292,7 @@ void VideoPlayer::CreateAudioThread()
 
 		// Ring buffer pool — each slot stays alive until XAudio2 consumes it
 		std::vector<std::vector<BYTE>> bufferPool(MAX_QUEUED_BUFFERS);
-		UINT32 currentBuffer = 0;
+		UINT32                         currentBuffer = 0;
 
 		AVPacket* packet = av_packet_alloc();
 		AVFrame*  frame = av_frame_alloc();
@@ -335,7 +336,7 @@ void VideoPlayer::CreateAudioThread()
 				auto&     buf = bufferPool[currentBuffer % MAX_QUEUED_BUFFERS];
 				buf.resize(static_cast<size_t>(outSamples) * audioFormat.nBlockAlign);
 
-				uint8_t* outPtr = buf.data();
+				uint8_t*  outPtr = buf.data();
 				const int converted = swr_convert(audioSwrCtx,
 					&outPtr, outSamples,
 					const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples);
