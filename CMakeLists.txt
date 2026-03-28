@@ -134,7 +134,7 @@ endif()
 
 find_package(imgui CONFIG REQUIRED)
 find_package(OpenCV COMPONENTS core videoio REQUIRED)
-find_package(FFMPEG REQUIRED)
+find_path(FFMPEG_INCLUDE_DIRS "libavcodec/avcodec.h")
 
 find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 
@@ -199,7 +199,19 @@ target_link_libraries(
 		${CommonLibName}::${CommonLibName}
 		${OpenCV_LIBS}
 		imgui::imgui
-		${FFMPEG_LIBRARIES}
+		avformat.lib
+		avcodec.lib
+		avutil.lib
+		swresample.lib
+		secur32.lib
+		ncrypt.lib
+		crypt32.lib
+		ws2_32.lib
+		mfuuid.lib
+		strmiids.lib
+		ole32.lib
+		user32.lib
+		bcrypt.lib
 		xaudio2.lib
 )
 
