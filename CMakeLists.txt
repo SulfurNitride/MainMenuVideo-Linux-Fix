@@ -12,8 +12,6 @@ option(BUILD_SKYRIMAE "Build for Skyrim AE" OFF)
 
 # ---- Cache build vars ----
 
-set($ENV{OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS} true)
-
 macro(set_from_environment VARIABLE)
 	if (NOT DEFINED ${VARIABLE} AND DEFINED ENV{${VARIABLE}})
 		set(${VARIABLE} $ENV{${VARIABLE}})
@@ -135,6 +133,15 @@ else ()
 endif()
 
 find_package(imgui CONFIG REQUIRED)
+
+# Pre-resolve FFmpeg Windows system deps so vcpkg's FFMPEGConfig.cmake
+# doesn't fail when OpenCV calls find_dependency(FFMPEG)
+foreach(_dep ncrypt crypt32 bcrypt secur32 ws2_32 mfuuid strmiids ole32 user32)
+	foreach(_cfg RELEASE DEBUG)
+		set(FFMPEG_DEPENDENCY_${_dep}_${_cfg} "${_dep}" CACHE STRING "")
+	endforeach()
+endforeach()
+
 find_package(OpenCV COMPONENTS core videoio REQUIRED)
 find_path(FFMPEG_INCLUDE_DIRS "libavcodec/avcodec.h")
 find_library(AVFORMAT_LIB NAMES avformat)

@@ -190,7 +190,7 @@ void VideoPlayer::CreateVideoThread()
 		auto restart_loop = [&]() {
 			readFrameCount.store(0, std::memory_order_relaxed);
 			cap.release();
-			cap.open(currentVideo, cv::CAP_MSMF, { cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY });
+			cap.open(currentVideo, cv::CAP_FFMPEG);
 			RestartAudioThread();
 			if (audioLoaded.load(std::memory_order_relaxed)) {
 				startBarrier.arrive_and_wait();
@@ -392,7 +392,7 @@ void VideoPlayer::RestartAudioThread()
 
 bool VideoPlayer::LoadVideo(ID3D11Device* device, const std::string& path, bool playAudio)
 {
-	cap.open(path, cv::CAP_MSMF, { cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY });
+	cap.open(path, cv::CAP_FFMPEG);
 	if (!cap.isOpened()) {
 		currentVideo.clear();
 		logger::warn("Couldn't load {}", path);
