@@ -12,8 +12,6 @@ option(BUILD_SKYRIMAE "Build for Skyrim AE" OFF)
 
 # ---- Cache build vars ----
 
-set($ENV{OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS} true)
-
 macro(set_from_environment VARIABLE)
 	if (NOT DEFINED ${VARIABLE} AND DEFINED ENV{${VARIABLE}})
 		set(${VARIABLE} $ENV{${VARIABLE}})
@@ -136,6 +134,7 @@ endif()
 
 find_package(imgui CONFIG REQUIRED)
 find_package(OpenCV COMPONENTS core videoio REQUIRED)
+find_package(FFMPEG REQUIRED)
 
 find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/utils.hpp")
 
@@ -191,6 +190,7 @@ target_include_directories(
 		${CMAKE_CURRENT_SOURCE_DIR}/src
 		${CLIB_UTIL_INCLUDE_DIRS}
 		${OpenCV_INCLUDE_DIRS}
+		${FFMPEG_INCLUDE_DIRS}
 )
 
 target_link_libraries(
@@ -199,9 +199,7 @@ target_link_libraries(
 		${CommonLibName}::${CommonLibName}
 		${OpenCV_LIBS}
 		imgui::imgui
-		mfplat.lib
-		mfreadwrite.lib
-		mfuuid.lib
+		${FFMPEG_LIBRARIES}
 		xaudio2.lib
 )
 

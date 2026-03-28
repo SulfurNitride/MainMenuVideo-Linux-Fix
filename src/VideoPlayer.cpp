@@ -2,6 +2,14 @@
 
 #include "Manager.h"
 
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/opt.h>
+#include <libswresample/swresample.h>
+}
+
 ImGui::Texture::Texture(ID3D11Device* device, std::uint32_t a_width, std::uint32_t a_height)
 {
 	D3D11_TEXTURE2D_DESC desc{
@@ -44,65 +52,89 @@ void ImGui::Texture::Update(ID3D11DeviceContext* context, const cv::Mat& mat) co
 	}
 }
 
-// XAudio2 audio output (replaces MF Audio Renderer for Wine/Proton compatibility)
-// MF Source Reader decodes audio to PCM, XAudio2 handles playback via FAudio on Linux
+// FFmpeg audio decoding + XAudio2 output
+// No Windows Media Foundation dependency — works natively on both Windows and Proton
 bool VideoPlayer::LoadAudio(const std::string& path)
 {
-	HRESULT hr = MFCreateSourceReaderFromURL(stl::utf8_to_utf16(path)->c_str(), nullptr, &audioReader);
-	if (FAILED(hr)) {
-		logger::warn("Failed to create MF source reader for audio: 0x{:X}", static_cast<std::uint32_t>(hr));
+	// Open file with FFmpeg
+	if (avformat_open_input(&audioFmtCtx, path.c_str(), nullptr, nullptr) < 0) {
+		logger::warn("FFmpeg: failed to open {}", path);
 		ResetAudio();
 		return false;
 	}
 
-	// Select only the audio stream
-	hr = audioReader->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
-	if (FAILED(hr)) {
-		ResetAudio();
-		return false;
-	}
-	hr = audioReader->SetStreamSelection((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
-	if (FAILED(hr)) {
+	if (avformat_find_stream_info(audioFmtCtx, nullptr) < 0) {
+		logger::warn("FFmpeg: failed to find stream info");
 		ResetAudio();
 		return false;
 	}
 
-	// Request decoded PCM output from the source reader
-	ComPtr<IMFMediaType> pcmType;
-	hr = MFCreateMediaType(&pcmType);
-	if (FAILED(hr)) {
-		ResetAudio();
-		return false;
-	}
-	pcmType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-	pcmType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
-	hr = audioReader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, NULL, pcmType.Get());
-	if (FAILED(hr)) {
-		logger::warn("Failed to set PCM output type on source reader: 0x{:X}", static_cast<std::uint32_t>(hr));
+	// Find best audio stream
+	audioStreamIdx = av_find_best_stream(audioFmtCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+	if (audioStreamIdx < 0) {
+		logger::warn("FFmpeg: no audio stream found in {}", path);
 		ResetAudio();
 		return false;
 	}
 
-	// Get the actual decoded output format
-	ComPtr<IMFMediaType> outputType;
-	hr = audioReader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, &outputType);
-	if (FAILED(hr)) {
+	// Open audio decoder
+	const auto* stream = audioFmtCtx->streams[audioStreamIdx];
+	const auto* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+	if (!codec) {
+		logger::warn("FFmpeg: unsupported audio codec");
 		ResetAudio();
 		return false;
 	}
 
-	UINT32        formatSize = 0;
-	WAVEFORMATEX* pFormat = nullptr;
-	hr = MFCreateWaveFormatExFromMFMediaType(outputType.Get(), &pFormat, &formatSize);
-	if (FAILED(hr) || !pFormat) {
+	audioDecCtx = avcodec_alloc_context3(codec);
+	if (!audioDecCtx) {
 		ResetAudio();
 		return false;
 	}
-	audioFormat = *pFormat;
-	CoTaskMemFree(pFormat);
 
-	// Create XAudio2 engine (uses FAudio on Proton/Wine)
-	hr = XAudio2Create(&xaudio2);
+	avcodec_parameters_to_context(audioDecCtx, stream->codecpar);
+	if (avcodec_open2(audioDecCtx, codec, nullptr) < 0) {
+		logger::warn("FFmpeg: failed to open audio decoder");
+		ResetAudio();
+		return false;
+	}
+
+	// Set up resampler: decode to S16 interleaved PCM for XAudio2
+	const int outChannels = audioDecCtx->ch_layout.nb_channels;
+	const int outSampleRate = audioDecCtx->sample_rate;
+
+	AVChannelLayout outLayout{};
+	av_channel_layout_default(&outLayout, outChannels);
+
+	if (swr_alloc_set_opts2(&audioSwrCtx,
+			&outLayout, AV_SAMPLE_FMT_S16, outSampleRate,
+			&audioDecCtx->ch_layout, audioDecCtx->sample_fmt, outSampleRate,
+			0, nullptr) < 0) {
+		logger::warn("FFmpeg: failed to configure resampler");
+		av_channel_layout_uninit(&outLayout);
+		ResetAudio();
+		return false;
+	}
+	av_channel_layout_uninit(&outLayout);
+
+	if (swr_init(audioSwrCtx) < 0) {
+		logger::warn("FFmpeg: failed to init resampler");
+		ResetAudio();
+		return false;
+	}
+
+	// Fill WAVEFORMATEX for XAudio2
+	audioFormat = {};
+	audioFormat.wFormatTag = WAVE_FORMAT_PCM;
+	audioFormat.nChannels = static_cast<WORD>(outChannels);
+	audioFormat.nSamplesPerSec = static_cast<DWORD>(outSampleRate);
+	audioFormat.wBitsPerSample = 16;
+	audioFormat.nBlockAlign = audioFormat.nChannels * audioFormat.wBitsPerSample / 8;
+	audioFormat.nAvgBytesPerSec = audioFormat.nSamplesPerSec * audioFormat.nBlockAlign;
+	audioFormat.cbSize = 0;
+
+	// Create XAudio2 engine (uses FAudio on Proton)
+	HRESULT hr = XAudio2Create(&xaudio2);
 	if (FAILED(hr)) {
 		logger::warn("Failed to create XAudio2 engine: 0x{:X}", static_cast<std::uint32_t>(hr));
 		ResetAudio();
@@ -125,8 +157,9 @@ bool VideoPlayer::LoadAudio(const std::string& path)
 
 	sourceVoice->SetVolume(volume.load(std::memory_order_relaxed));
 
-	logger::info("Audio loaded via XAudio2: {}ch {}Hz {}bit",
-		audioFormat.nChannels, audioFormat.nSamplesPerSec, audioFormat.wBitsPerSample);
+	logger::info("Audio loaded via FFmpeg+XAudio2: {} {} {}ch {}Hz",
+		codec->name, av_get_sample_fmt_name(audioDecCtx->sample_fmt),
+		outChannels, outSampleRate);
 
 	return true;
 }
@@ -156,7 +189,7 @@ void VideoPlayer::CreateVideoThread()
 		auto restart_loop = [&]() {
 			readFrameCount.store(0, std::memory_order_relaxed);
 			cap.release();
-			cap.open(currentVideo, cv::CAP_MSMF, { cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY });
+			cap.open(currentVideo, cv::CAP_FFMPEG);
 			RestartAudioThread();
 			if (audioLoaded.load(std::memory_order_relaxed)) {
 				startBarrier.arrive_and_wait();
@@ -254,12 +287,14 @@ void VideoPlayer::CreateAudioThread()
 		startBarrier.arrive_and_wait();
 		sourceVoice->Start();
 
-		constexpr DWORD  audioStreamIndex = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
 		constexpr UINT32 MAX_QUEUED_BUFFERS = 4;
 
 		// Ring buffer pool — each slot stays alive until XAudio2 consumes it
 		std::vector<std::vector<BYTE>> bufferPool(MAX_QUEUED_BUFFERS);
-		UINT32                         currentBuffer = 0;
+		UINT32 currentBuffer = 0;
+
+		AVPacket* packet = av_packet_alloc();
+		AVFrame*  frame = av_frame_alloc();
 
 		while (!st.stop_requested()) {
 			// Throttle: wait if XAudio2 has enough queued data
@@ -270,44 +305,66 @@ void VideoPlayer::CreateAudioThread()
 				continue;
 			}
 
-			ComPtr<IMFSample> sample;
-			DWORD             streamFlags = 0;
-			MFTIME            timestamp = 0;
-
-			HRESULT hr = audioReader->ReadSample(audioStreamIndex, 0, nullptr, &streamFlags, &timestamp, &sample);
-			if (FAILED(hr) || (streamFlags & MF_SOURCE_READERF_ENDOFSTREAM)) {
-				break;
+			// Read next packet from container
+			int ret = av_read_frame(audioFmtCtx, packet);
+			if (ret < 0) {
+				break;  // EOF or error
 			}
 
-			if (!sample) {
+			// Skip non-audio packets (video, subtitle, etc.)
+			if (packet->stream_index != audioStreamIdx) {
+				av_packet_unref(packet);
 				continue;
 			}
 
-			ComPtr<IMFMediaBuffer> mediaBuffer;
-			hr = sample->ConvertToContiguousBuffer(&mediaBuffer);
-			if (FAILED(hr)) {
+			// Send packet to decoder
+			ret = avcodec_send_packet(audioDecCtx, packet);
+			av_packet_unref(packet);
+			if (ret < 0) {
 				continue;
 			}
 
-			BYTE* rawData = nullptr;
-			DWORD rawLen = 0;
-			hr = mediaBuffer->Lock(&rawData, nullptr, &rawLen);
-			if (FAILED(hr)) {
-				continue;
+			// Receive decoded frames and resample to S16 PCM
+			while (avcodec_receive_frame(audioDecCtx, frame) == 0) {
+				if (st.stop_requested()) {
+					av_frame_unref(frame);
+					break;
+				}
+
+				const int outSamples = swr_get_out_samples(audioSwrCtx, frame->nb_samples);
+				auto&     buf = bufferPool[currentBuffer % MAX_QUEUED_BUFFERS];
+				buf.resize(static_cast<size_t>(outSamples) * audioFormat.nBlockAlign);
+
+				uint8_t* outPtr = buf.data();
+				const int converted = swr_convert(audioSwrCtx,
+					&outPtr, outSamples,
+					const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples);
+
+				av_frame_unref(frame);
+
+				if (converted <= 0) {
+					continue;
+				}
+
+				// Wait for buffer slot if needed
+				do {
+					sourceVoice->GetState(&voiceState);
+					if (voiceState.BuffersQueued >= MAX_QUEUED_BUFFERS) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					}
+				} while (voiceState.BuffersQueued >= MAX_QUEUED_BUFFERS && !st.stop_requested());
+
+				XAUDIO2_BUFFER xbuf{};
+				xbuf.AudioBytes = static_cast<UINT32>(converted) * audioFormat.nBlockAlign;
+				xbuf.pAudioData = buf.data();
+
+				sourceVoice->SubmitSourceBuffer(&xbuf);
+				currentBuffer++;
 			}
-
-			// Copy decoded PCM into our persistent buffer slot
-			auto& buf = bufferPool[currentBuffer % MAX_QUEUED_BUFFERS];
-			buf.assign(rawData, rawData + rawLen);
-			mediaBuffer->Unlock();
-
-			XAUDIO2_BUFFER xbuf{};
-			xbuf.AudioBytes = rawLen;
-			xbuf.pAudioData = buf.data();
-
-			sourceVoice->SubmitSourceBuffer(&xbuf);
-			currentBuffer++;
 		}
+
+		av_frame_free(&frame);
+		av_packet_free(&packet);
 
 		// Drain remaining buffers before exiting (unless stop requested)
 		if (!st.stop_requested()) {
@@ -334,7 +391,7 @@ void VideoPlayer::RestartAudioThread()
 
 bool VideoPlayer::LoadVideo(ID3D11Device* device, const std::string& path, bool playAudio)
 {
-	cap.open(path, cv::CAP_MSMF, { cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_ANY });
+	cap.open(path, cv::CAP_FFMPEG);
 	if (!cap.isOpened()) {
 		currentVideo.clear();
 		logger::warn("Couldn't load {}", path);
@@ -381,7 +438,17 @@ bool VideoPlayer::LoadVideo(ID3D11Device* device, const std::string& path, bool 
 
 void VideoPlayer::ResetAudio()
 {
-	audioReader = nullptr;
+	if (audioSwrCtx) {
+		swr_free(&audioSwrCtx);
+	}
+	if (audioDecCtx) {
+		avcodec_free_context(&audioDecCtx);
+	}
+	if (audioFmtCtx) {
+		avformat_close_input(&audioFmtCtx);
+	}
+	audioStreamIdx = -1;
+
 	if (sourceVoice) {
 		sourceVoice->Stop();
 		sourceVoice->FlushSourceBuffers();

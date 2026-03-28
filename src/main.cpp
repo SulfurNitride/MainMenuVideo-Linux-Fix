@@ -72,12 +72,6 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 
 	logger::info("Game version : {}", a_skse->RuntimeVersion().string());
 
-	// Explicitly initialize Media Foundation for Wine/Proton compatibility
-	HRESULT hr = MFStartup(MF_VERSION);
-	if (FAILED(hr)) {
-		logger::warn("MFStartup failed (0x{:X}) — video audio may not work", static_cast<std::uint32_t>(hr));
-	}
-
 	SKSE::Init(a_skse, false);
 
 	const auto messaging = SKSE::GetMessagingInterface();

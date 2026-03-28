@@ -7,13 +7,18 @@
   "dependencies": [
     "clib-util",
     {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": [ "avcodec", "avformat", "swresample" ]
+    },
+    {
       "name": "imgui",
       "features": [ "dx11-binding", "win32-binding", "wchar32" ]
     },
     {
       "name": "opencv4",
       "default-features": false,
-      "features": [ "fs", "intrinsics", "msmf", "thread" ]
+      "features": [ "ffmpeg", "fs", "intrinsics", "thread" ]
     },
     "rsm-binary-io",
     "spdlog",

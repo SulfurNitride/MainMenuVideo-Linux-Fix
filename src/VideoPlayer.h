@@ -1,5 +1,10 @@
 #pragma once
 
+// Forward declarations for FFmpeg (C library)
+struct AVFormatContext;
+struct AVCodecContext;
+struct SwrContext;
+
 namespace ImGui
 {
 	struct Texture
@@ -105,7 +110,10 @@ private:
 	duration                        debugUpdateInterval{ 0.1 };
 	cv::Mat                         videoFrame;
 	mutable Lock                    videoFrameLock;
-	ComPtr<IMFSourceReader>         audioReader{};
+	AVFormatContext*                audioFmtCtx{ nullptr };
+	AVCodecContext*                 audioDecCtx{ nullptr };
+	SwrContext*                     audioSwrCtx{ nullptr };
+	int                             audioStreamIdx{ -1 };
 	ComPtr<IXAudio2>                xaudio2{};
 	IXAudio2MasteringVoice*         masterVoice{ nullptr };
 	IXAudio2SourceVoice*            sourceVoice{ nullptr };

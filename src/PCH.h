@@ -17,12 +17,7 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 
-#include <Mferror.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
-#include <propvarutil.h>
-// Temporarily override _WIN32_WINNT for xaudio2.h (requires Win8+)
+// Override _WIN32_WINNT for xaudio2.h (requires Win8+)
 // CommonLibSSE sets it to Win7, but XAudio2 is available on Proton via FAudio
 #pragma push_macro("_WIN32_WINNT")
 #undef _WIN32_WINNT
